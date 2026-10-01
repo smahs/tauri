@@ -1103,7 +1103,7 @@ impl WindowBuilder for WindowBuilderWrapper {
     target_os = "netbsd",
     target_os = "openbsd"
   ))]
-  fn transient_for(mut self, parent: &impl gtk::glib::IsA<gtk::Window>) -> Self {
+  fn transient_for(mut self, parent: &impl gtk::glib::object::IsA<gtk::Window>) -> Self {
     self.inner = self.inner.with_transient_for(parent);
     self
   }
@@ -3320,7 +3320,7 @@ fn handle_user_message<T: UserEvent>(
             target_os = "netbsd",
             target_os = "openbsd"
           ))]
-          WindowMessage::GtkWindow(tx) => tx.send(GtkWindow(window.gtk_window().clone())).unwrap(),
+          WindowMessage::GtkWindow(tx) => tx.send(GtkWindow(window.gtk_window().clone().into())).unwrap(),
           #[cfg(any(
             target_os = "linux",
             target_os = "dragonfly",
@@ -4251,7 +4251,7 @@ fn handle_event_loop<T: UserEvent>(
             }
           }
           TaoWindowEvent::CloseRequested => {
-            on_close_requested(callback, window_id, windows);
+            on_close_requested(callback, window_id, windows, control_flow);
           }
           TaoWindowEvent::Destroyed => {
             let removed = windows.0.borrow_mut().remove(&window_id).is_some();
@@ -4312,10 +4312,10 @@ fn handle_event_loop<T: UserEvent>(
         }
       }
       Message::Window(id, WindowMessage::Close) => {
-        on_close_requested(callback, id, windows);
+        on_close_requested(callback, id, windows, control_flow);
       }
       Message::Window(id, WindowMessage::Destroy) => {
-        on_window_close(id, windows);
+        on_window_close(id, windows, callback, control_flow);
       }
       Message::UserEvent(t) => callback(RunEvent::UserEvent(t)),
       message => {
@@ -4352,6 +4352,7 @@ fn on_close_requested<'a, T: UserEvent>(
   callback: &'a mut (dyn FnMut(RunEvent<T>) + 'static),
   window_id: WindowId,
   windows: &WindowsStore,
+  control_flow: &mut ControlFlow,
 ) {
   let (tx, rx) = channel();
   let windows_ref = windows.0.borrow();
@@ -4374,16 +4375,35 @@ fn on_close_requested<'a, T: UserEvent>(
     });
     if let Ok(true) = rx.try_recv() {
     } else {
-      on_window_close(window_id, windows);
+      on_window_close(window_id, windows, callback, control_flow);
     }
   }
 }
 
-fn on_window_close(window_id: WindowId, windows: &WindowsStore) {
-  if let Some(window_wrapper) = windows.0.borrow_mut().get_mut(&window_id) {
-    window_wrapper.inner = None;
-    #[cfg(windows)]
-    window_wrapper.surface.take();
+fn on_window_close<T: UserEvent>(
+  window_id: WindowId,
+  windows: &WindowsStore,
+  callback: &mut (dyn FnMut(RunEvent<T>) + 'static),
+  control_flow: &mut ControlFlow,
+) {
+  let window_wrapper = windows.0.borrow_mut().remove(&window_id);
+
+  if window_wrapper.is_some() {
+    // `window_wrapper` already owns the removed entry; the `RefMut` guard was dropped at
+    // the previous statement, so calling `windows.0.borrow()` below is safe here.
+    drop(window_wrapper);
+
+    if windows.0.borrow().is_empty() {
+      let (tx, rx) = channel();
+      callback(RunEvent::ExitRequested { code: None, tx });
+
+      let recv = rx.try_recv();
+      let should_prevent = matches!(recv, Ok(ExitRequestedEventAction::Prevent));
+
+      if !should_prevent {
+        *control_flow = ControlFlow::Exit;
+      }
+    }
   }
 }
 
@@ -4574,7 +4594,7 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
         target_os = "netbsd",
         target_os = "openbsd"
       ))]
-      gtk_window: window.gtk_window(),
+      gtk_window: window.gtk_window().as_ref(),
       #[cfg(any(
         target_os = "linux",
         target_os = "dragonfly",

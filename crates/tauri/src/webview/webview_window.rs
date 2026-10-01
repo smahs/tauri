@@ -768,7 +768,7 @@ impl<'a, R: Runtime, M: Manager<R>> WebviewWindowBuilder<'a, R, M> {
     target_os = "openbsd"
   ))]
   #[must_use]
-  pub fn transient_for_raw(mut self, parent: &impl gtk::glib::IsA<gtk::Window>) -> Self {
+  pub fn transient_for_raw(mut self, parent: &impl gtk::glib::object::IsA<gtk::Window>) -> Self {
     self.window_builder = self.window_builder.transient_for_raw(parent);
     self
   }
@@ -1449,7 +1449,7 @@ impl<R: Runtime, M: Manager<R>> WebviewWindowBuilder<'_, R, M> {
       target_os = "openbsd",
     )
   ))]
-  pub fn with_related_view(mut self, related_view: webkit2gtk::WebView) -> Self {
+  pub fn with_related_view(mut self, related_view: webkit6::WebView) -> Self {
     self.webview_builder = self.webview_builder.with_related_view(related_view);
     self
   }
@@ -2456,9 +2456,9 @@ impl<R: Runtime> WebviewWindow<R> {
   ///       main_webview.with_webview(|webview| {
   ///         #[cfg(target_os = "linux")]
   ///         {
-  ///           // see <https://docs.rs/webkit2gtk/2.0.0/webkit2gtk/struct.WebView.html>
-  ///           // and <https://docs.rs/webkit2gtk/2.0.0/webkit2gtk/trait.WebViewExt.html>
-  ///           use webkit2gtk::WebViewExt;
+  ///           // see <https://docs.rs/webkit6/latest/webkit6/struct.WebView.html>
+  ///           // and <https://docs.rs/webkit6/latest/webkit6/trait.WebViewExt.html>
+  ///           use webkit6::WebViewExt;
   ///           webview.inner().set_zoom_level(4.);
   ///         }
   ///

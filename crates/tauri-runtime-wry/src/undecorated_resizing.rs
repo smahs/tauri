@@ -10,6 +10,11 @@
   target_os = "netbsd",
   target_os = "openbsd"
 ))]
+// `HitTestResult`, `hit_test`, the edge-flag constants and `WindowPositions` are shared
+// by the Windows resizer (always compiled where available) and were also used by the GTK3
+// resizer which has been replaced by a no-op under GTK4 — so on Linux they are currently
+// unused. This is expected, not an error.
+#![allow(dead_code)]
 
 const CLIENT: isize = 0b0000;
 const LEFT: isize = 0b0001;
@@ -505,150 +510,14 @@ mod windows {
   }
 }
 
+// The GTK3 implementation used GDK3's public `GdkWindowEdge` +
+// `gdk_window_begin_resize_drag` to perform native edge-drag resizing of
+// undecorated windows. GTK4 (GDK) removed that API surface, so there is no
+// direct equivalent. `attach_resize_handler` is therefore a no-op under GTK4
+// for now; a future iteration can re-implement software-based resizing using
+// pointer/touch event controllers.
 #[cfg(not(windows))]
 mod gtk {
-  use super::{HitTestResult, hit_test};
-  use gtk::prelude::*;
-
-  const BORDERLESS_RESIZE_INSET: i32 = 5;
-
-  impl HitTestResult {
-    fn to_gtk_edge(self) -> gtk::gdk::WindowEdge {
-      match self {
-        HitTestResult::Client | HitTestResult::NoWhere => gtk::gdk::WindowEdge::__Unknown(0),
-        HitTestResult::Left => gtk::gdk::WindowEdge::West,
-        HitTestResult::Right => gtk::gdk::WindowEdge::East,
-        HitTestResult::Top => gtk::gdk::WindowEdge::North,
-        HitTestResult::Bottom => gtk::gdk::WindowEdge::South,
-        HitTestResult::TopLeft => gtk::gdk::WindowEdge::NorthWest,
-        HitTestResult::TopRight => gtk::gdk::WindowEdge::NorthEast,
-        HitTestResult::BottomLeft => gtk::gdk::WindowEdge::SouthWest,
-        HitTestResult::BottomRight => gtk::gdk::WindowEdge::SouthEast,
-      }
-    }
-
-    fn to_cursor(self, display: &gtk::gdk::Display) -> Option<gtk::gdk::Cursor> {
-      use gtk::gdk::CursorType;
-
-      let cursor_type = match self {
-        HitTestResult::Left => CursorType::LeftSide,
-        HitTestResult::Right => CursorType::RightSide,
-        HitTestResult::Top => CursorType::TopSide,
-        HitTestResult::Bottom => CursorType::BottomSide,
-        HitTestResult::TopLeft => CursorType::TopLeftCorner,
-        HitTestResult::TopRight => CursorType::TopRightCorner,
-        HitTestResult::BottomLeft => CursorType::BottomLeftCorner,
-        HitTestResult::BottomRight => CursorType::BottomRightCorner,
-        HitTestResult::Client | HitTestResult::NoWhere => return None,
-      };
-
-      gtk::gdk::Cursor::for_display(display, cursor_type)
-    }
-  }
-
-  fn resizable_window(webview: &webkit2gtk::WebView) -> Option<gtk::Window> {
-    let window = webview.parent()?.parent()?.downcast::<gtk::Window>().ok()?;
-    (!window.is_decorated() && window.is_resizable() && !window.is_maximized()).then_some(window)
-  }
-
-  fn hit_test_window(window: &gtk::gdk::Window, x: f64, y: f64) -> HitTestResult {
-    let border = window.scale_factor() * BORDERLESS_RESIZE_INSET;
-    hit_test(
-      0.0,
-      0.0,
-      window.width() as f64,
-      window.height() as f64,
-      x,
-      y,
-      border as _,
-      border as _,
-    )
-  }
-
-  fn hit_test_window_root(window: &gtk::gdk::Window, root_x: f64, root_y: f64) -> HitTestResult {
-    let (window_x, window_y) = window.position();
-    hit_test_window(window, root_x - window_x as f64, root_y - window_y as f64)
-  }
-
-  pub fn attach_resize_handler(webview: &wry::WebView) {
-    use gtk::{gdk::WindowEdge, glib::Propagation};
-    use wry::WebViewExtUnix;
-
-    let webview = webview.webview();
-
-    webview.add_events(
-      gtk::gdk::EventMask::POINTER_MOTION_MASK
-        | gtk::gdk::EventMask::BUTTON1_MOTION_MASK
-        | gtk::gdk::EventMask::BUTTON_PRESS_MASK
-        | gtk::gdk::EventMask::TOUCH_MASK,
-    );
-
-    webview.connect_motion_notify_event(
-      move |webview: &webkit2gtk::WebView, event: &gtk::gdk::EventMotion| {
-        let Some(window) = resizable_window(webview).and_then(|_| webview.window()) else {
-          return Propagation::Proceed;
-        };
-
-        let (x, y) = event.position();
-        let result = hit_test_window(&window, x, y);
-        if matches!(result, HitTestResult::Client | HitTestResult::NoWhere) {
-          return Propagation::Proceed;
-        }
-
-        let cursor = result.to_cursor(&window.display());
-        window.set_cursor(cursor.as_ref());
-        Propagation::Stop
-      },
-    );
-
-    webview.connect_button_press_event(
-      move |webview: &webkit2gtk::WebView, event: &gtk::gdk::EventButton| {
-        if event.button() != 1 {
-          return Propagation::Proceed;
-        }
-        let Some(window) = resizable_window(webview).and_then(|w| w.window()) else {
-          return Propagation::Proceed;
-        };
-
-        let (root_x, root_y) = event.root();
-        let edge = hit_test_window_root(&window, root_x, root_y).to_gtk_edge();
-        if matches!(&edge, WindowEdge::__Unknown(_)) {
-          return Propagation::Proceed;
-        }
-
-        window.begin_resize_drag(edge, 1, root_x as i32, root_y as i32, event.time());
-        // Prevent the webview from handling an event claimed by the resize inset
-        Propagation::Stop
-      },
-    );
-
-    webview.connect_touch_event(
-      move |webview: &webkit2gtk::WebView, event: &gtk::gdk::Event| {
-        let Some(window) = resizable_window(webview).and_then(|w| w.window()) else {
-          return Propagation::Proceed;
-        };
-        let Some((root_x, root_y)) = event.root_coords() else {
-          return Propagation::Proceed;
-        };
-        let Some(device) = event.device() else {
-          return Propagation::Proceed;
-        };
-
-        let edge = hit_test_window_root(&window, root_x, root_y).to_gtk_edge();
-        if matches!(&edge, WindowEdge::__Unknown(_)) {
-          return Propagation::Proceed;
-        }
-
-        window.begin_resize_drag_for_device(
-          edge,
-          &device,
-          0,
-          root_x as i32,
-          root_y as i32,
-          event.time(),
-        );
-        Propagation::Proceed
-      },
-    );
-  }
+  #[allow(clippy::wrong_self_convention)]
+  pub fn attach_resize_handler(_webview: &wry::WebView) {}
 }
